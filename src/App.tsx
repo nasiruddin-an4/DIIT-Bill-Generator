@@ -1,13 +1,83 @@
 import { useState, useEffect } from "react";
-import { Printer, FileText, Settings2, Download } from "lucide-react";
+import {
+  Printer,
+  FileText,
+  Settings2,
+  Download,
+  Bot,
+  Sparkles,
+} from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "./lib/utils";
 import { numberToWords } from "./utils/numberToWords";
 import diitLogo from "./diitLogo.webp";
 import metaLogo from "./Meta-Logo.png";
+import JSZip from "jszip";
 
 // @ts-ignore
 import html2pdf from "html2pdf.js";
+
+const generateReqRefNo = () => {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(1, "0");
+
+  const storageKey = `diit_req_seq_${year}_${month}`;
+  let currentSeq = parseInt(localStorage.getItem(storageKey) || "0", 10);
+  currentSeq += 1;
+
+  localStorage.setItem(storageKey, currentSeq.toString());
+
+  const seqPadded = currentSeq.toString().padStart(1, "0");
+  return `Promotion/FB/${month}/${seqPadded}`;
+};
+
+const generateFbRefNumber = () => {
+  return Array.from(
+    { length: 12 },
+    () =>
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 36)],
+  ).join("");
+};
+
+const generateFbTransactionId = () => {
+  const part1 = Array.from(
+    { length: 16 },
+    () =>
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 36)],
+  ).join("");
+  const part2 = Array.from(
+    { length: 8 },
+    () =>
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 36)],
+  ).join("");
+  return `${part1}-${part2}`;
+};
+
+const getRecommendation = (title: string) => {
+  const upperTitle = title.toUpperCase();
+  if (upperTitle.includes("MBA")) {
+    return {
+      recommendedBy: "Md. Omar Faruk",
+      recommendedByTitle: "Assistant Professor & Head of the Department \nDIIT",
+    };
+  } else if (upperTitle.includes("MTHM")) {
+    return {
+      recommendedBy: "Md. Jahidul Islam Rony",
+      recommendedByTitle: "Head of the Department, THM \nDIIT",
+    };
+  } else if (upperTitle.includes("THM")) {
+    return {
+      recommendedBy: "Md. Jahidul Islam Rony",
+      recommendedByTitle: "Head of the Department, THM \nDIIT",
+    };
+  } else {
+    return {
+      recommendedBy: "Mahbubur Rahman",
+      recommendedByTitle: "Assistant Director \nDIIT",
+    };
+  }
+};
 
 type BillType = "requisition" | "facebook";
 
@@ -55,18 +125,26 @@ interface FacebookBillData {
 export default function App() {
   const [billType, setBillType] = useState<BillType>("requisition");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingBoth, setIsGeneratingBoth] = useState(false);
   const [adsTitle, setAdsTitle] = useState("DIIT Admission Going on");
+  const [smartPrompt, setSmartPrompt] = useState("");
+  const [apiKey, setApiKey] = useState(
+    import.meta.env.VITE_GEMINI_API_KEY ||
+      localStorage.getItem("gemini_api_key") ||
+      "",
+  );
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  const [data, setData] = useState<BillData>({
-    refNo: "Promotion/FB/03/0008",
+  const [data, setData] = useState<BillData>(() => ({
+    refNo: generateReqRefNo(),
     date: new Date().toISOString().split("T")[0],
     subject:
-      "Approval Request for Facebook Promotional Budget – “DIIT Admission Going on”",
+      "Approval Request for Facebook Promotional Budget \u2013 \u201CDIIT Admission Going on\u201D",
     items: [
       {
         id: crypto.randomUUID(),
         description:
-          "Promotion for “DIIT Admission is Going On “image and video”",
+          "Promotion for \u201CDIIT Admission is Going On \u201Cimage and video\u201D",
         duration: "15 Day",
         amount: 20000,
       },
@@ -79,19 +157,19 @@ export default function App() {
     recommendedByTitle: "Assistant Director\nDIIT",
     approvedBy: "Prof. Dr. Mohammed Shakhawat Hossain",
     approvedByTitle: "Principal, DIIT",
-  });
+  }));
 
-  const [fbData, setFbData] = useState<FacebookBillData>({
+  const [fbData, setFbData] = useState<FacebookBillData>(() => ({
     accountName: "Blue_Space_AD Account",
     accountId: "2670376169783049",
     date: new Date().toISOString().split("T")[0],
-    paymentMethod: "Visa · 5602",
-    refNumber: "7XQ3M9B2L5Z8",
-    transactionId: "9H2D7K4X518B0632-47L8M920",
+    paymentMethod: "Visa \u00B7 5602",
+    refNumber: generateFbRefNumber(),
+    transactionId: generateFbTransactionId(),
     items: [
       {
         id: crypto.randomUUID(),
-        name: "DIIT ads “Admission Going on 26th Batch”",
+        name: "DIIT ads \u201CAdmission Going on 26th Batch\u201D",
         startDate: "2026-03-24T00:00",
         endDate: "2026-03-16T23:59",
         impressions: "(ongoing)",
@@ -99,7 +177,7 @@ export default function App() {
       },
     ],
     vatPercent: 18,
-  });
+  }));
 
   const subTotal = data.items.reduce((sum, item) => sum + item.amount, 0);
   const vatAmount = (subTotal * data.vatPercent) / 100;
@@ -212,6 +290,166 @@ export default function App() {
     }
   };
 
+  const handleDownloadBoth = async () => {
+    setIsGenerating(true);
+
+    const zip = new JSZip();
+    const originalType = billType;
+
+    try {
+      // 1. Generate Requisition Bill
+      setBillType("requisition");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const reqElement = document.getElementById("bill-preview");
+      if (reqElement) {
+        const opt = {
+          margin: 0,
+          filename: `Requisition_Bill_${data.refNo.replace(/\//g, "_")}.pdf`,
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        } as any;
+
+        const reqBlob = await html2pdf()
+          .set(opt)
+          .from(reqElement)
+          .output("blob");
+        zip.file(opt.filename, reqBlob);
+      }
+
+      // 2. Generate Facebook Invoice
+      setBillType("facebook");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const fbElement = document.getElementById("bill-preview");
+      if (fbElement) {
+        const opt2 = {
+          margin: 0,
+          filename: `Facebook_Invoice_${fbData.refNumber.replace(/\//g, "_")}.pdf`,
+          image: { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        } as any;
+
+        const fbBlob = await html2pdf()
+          .set(opt2)
+          .from(fbElement)
+          .output("blob");
+        zip.file(opt2.filename, fbBlob);
+      }
+
+      // 3. Download the ZIP
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `DIIT_Bills_${data.refNo.replace(/\//g, "_")}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to generate zip", err);
+    } finally {
+      setBillType(originalType);
+      setIsGeneratingBoth(false);
+      setIsGenerating(false);
+    }
+  };
+
+  const handleSmartFill = async () => {
+    if (!smartPrompt) return;
+
+    if (!apiKey) {
+      alert(
+        "Please enter a Google Gemini API Key below to use the smart auto-fill.",
+      );
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: `Extract the following details from this text: title, from_date (YYYY-MM-DD format), to_date (YYYY-MM-DD format), days (integer number, or null if not explicitly stated), amount (integer number). Return ONLY a valid JSON object with these exact keys. If a date is not given in full, guess the year as ${new Date().getFullYear()}. Text: "${smartPrompt}"`,
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      );
+
+      const resData = await response.json();
+      if (resData.error) throw new Error(resData.error.message);
+
+      const textResponse = resData.candidates[0].content.parts[0].text;
+      const cleanJson = textResponse
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+      const parsed = JSON.parse(cleanJson);
+
+      let calculatedDays = parsed.days;
+      if (!calculatedDays && parsed.from_date && parsed.to_date) {
+        const start = new Date(parsed.from_date);
+        const end = new Date(parsed.to_date);
+        calculatedDays =
+          Math.round(
+            Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24),
+          ) + 1;
+      }
+
+      const newReqData = { ...data };
+      newReqData.refNo = generateReqRefNo();
+      if (parsed.title) {
+        newReqData.subject = `Approval Request for Facebook Promotional Budget \u2013 \u201C${parsed.title}\u201D`;
+        newReqData.items[0].description = `Promotion for \u201C${parsed.title}\u201D \u201Cimage and video\u201D`;
+
+        const rec = getRecommendation(parsed.title);
+        newReqData.recommendedBy = rec.recommendedBy;
+        newReqData.recommendedByTitle = rec.recommendedByTitle;
+
+        setAdsTitle(parsed.title);
+      }
+      if (calculatedDays)
+        newReqData.items[0].duration = `${calculatedDays} Day${calculatedDays > 1 ? "s" : ""}`;
+      if (parsed.amount) newReqData.items[0].amount = Number(parsed.amount);
+      if (parsed.from_date) newReqData.date = parsed.from_date;
+      setData(newReqData);
+
+      const newFbData = { ...fbData };
+      newFbData.refNumber = generateFbRefNumber();
+      newFbData.transactionId = generateFbTransactionId();
+      if (parsed.title)
+        newFbData.items[0].name = `DIIT ads \u201C${parsed.title}\u201D`;
+      if (parsed.from_date) {
+        newFbData.items[0].startDate = `${parsed.from_date}T00:00`;
+        newFbData.date = parsed.from_date;
+      }
+      if (parsed.to_date)
+        newFbData.items[0].endDate = `${parsed.to_date}T23:59`;
+      if (parsed.amount) newFbData.items[0].amount = Number(parsed.amount);
+      setFbData(newFbData);
+    } catch (err) {
+      console.error(err);
+      alert(
+        "Failed to parse the text. Please ensure your API key is correct or check the prompt.",
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="h-screen bg-slate-50 flex flex-col overflow-hidden print:bg-white print:h-auto print:overflow-visible">
       {/* Top Header / Tab Switcher */}
@@ -257,6 +495,61 @@ export default function App() {
         {/* Sidebar / Form */}
         <div className="w-full lg:w-[450px] shrink-0 bg-white border-r border-slate-200 px-8 py-4 pb-10 overflow-y-auto print:hidden">
           <div className="space-y-6">
+            {/* AI Assistant Section */}
+            <section className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-xl border border-indigo-100 shadow-sm">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-indigo-600" /> Smart Auto-Fill
+                </h2>
+              </div>
+              <p className="text-xs text-indigo-700 mb-3 opacity-80">
+                Just type your requirements (e.g. "DIIT Admission, 1st March to
+                15th March, 30000 BDT") and the AI will fill both bills.
+              </p>
+              <textarea
+                placeholder="e.g. Title: DIIT Admission, 1st to 15th March, 30000 taka"
+                value={smartPrompt}
+                onChange={(e) => setSmartPrompt(e.target.value)}
+                className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm mb-3 focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-white/80 backdrop-blur-sm"
+                rows={3}
+              />
+              {!apiKey ? (
+                <input
+                  type="password"
+                  placeholder="Enter Google Gemini API Key"
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    localStorage.setItem("gemini_api_key", e.target.value);
+                  }}
+                  className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm mb-3 bg-white/80"
+                />
+              ) : null}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSmartFill}
+                  disabled={isProcessing || !smartPrompt}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Sparkles className="w-4 h-4" />{" "}
+                  {isProcessing ? "Filling..." : "Auto Fill"}
+                </button>
+                <button
+                  onClick={handleDownloadBoth}
+                  disabled={isGenerating}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" />{" "}
+                  {isGenerating ? "Wait..." : "Download Both"}
+                </button>
+              </div>
+              {apiKey && (
+                <p className="text-[10px] text-center mt-3 text-indigo-400">
+                  API Key saved securely in your browser.
+                </p>
+              )}
+            </section>
+
             {billType === "requisition" ? (
               <>
                 <section>
@@ -274,9 +567,12 @@ export default function App() {
                         onChange={(e) => {
                           const title = e.target.value;
                           setAdsTitle(title);
+                          const rec = getRecommendation(title);
                           setData((prev) => ({
                             ...prev,
                             subject: `Approval Request for Facebook Promotional Budget \u2013 \u201C${title}\u201D`,
+                            recommendedBy: rec.recommendedBy,
+                            recommendedByTitle: rec.recommendedByTitle,
                             items: prev.items.map((item) => ({
                               ...item,
                               description: `Promotion for \u201C${title}\u201D \u201Cimage and video\u201D`,
@@ -285,19 +581,6 @@ export default function App() {
                         }}
                         placeholder="e.g. DIIT Admission Going on"
                         className="w-full px-3 py-2 border-2 border-blue-200 bg-blue-50/50 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all font-medium"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-slate-700 mb-1">
-                        Reference No
-                      </label>
-                      <input
-                        type="text"
-                        value={data.refNo}
-                        onChange={(e) =>
-                          setData({ ...data, refNo: e.target.value })
-                        }
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                       />
                     </div>
                     <div>
@@ -582,8 +865,20 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Reference Number
+                      <label className="block text-sm font-medium text-slate-700 mb-1 flex justify-between items-center">
+                        <span>Reference Number</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFbData({
+                              ...fbData,
+                              refNumber: generateFbRefNumber(),
+                            })
+                          }
+                          className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                        >
+                          Generate New
+                        </button>
                       </label>
                       <input
                         type="text"
@@ -595,8 +890,20 @@ export default function App() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">
-                        Transaction ID
+                      <label className="block text-sm font-medium text-slate-700 mb-1 flex justify-between items-center">
+                        <span>Transaction ID</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFbData({
+                              ...fbData,
+                              transactionId: generateFbTransactionId(),
+                            })
+                          }
+                          className="text-xs text-blue-600 hover:text-blue-700 font-semibold"
+                        >
+                          Generate New
+                        </button>
                       </label>
                       <input
                         type="text"
@@ -781,9 +1088,8 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Ref & Date */}
+                {/* Date */}
                 <div className="mb-4">
-                  <p className="">Ref:- {data.refNo}</p>
                   <p className="font-bold mt-4">
                     {new Date(data.date)
                       .toLocaleDateString("en-GB", {
