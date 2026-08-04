@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Printer,
   FileText,
@@ -6,6 +6,7 @@ import {
   Download,
   Bot,
   Sparkles,
+  Send,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "./lib/utils";
@@ -122,18 +123,44 @@ interface FacebookBillData {
   vatPercent: number;
 }
 
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: Date;
+  filledData?: boolean;
+}
+
+const QUICK_ACTIONS = [
+  { label: "🎓 DIIT Admission", prompt: "DIIT Admission Going on, 1st to 15th of this month, 30000 taka" },
+  { label: "📚 MBA Program", prompt: "MBA Program Admission, 1st to 30th of this month, 25000 taka" },
+  { label: "🏨 THM Program", prompt: "THM Program Admission, 1st to 15th of this month, 20000 taka" },
+  { label: "🎯 Custom", prompt: "" },
+];
+
 export default function App() {
   const [billType, setBillType] = useState<BillType>("requisition");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingBoth, setIsGeneratingBoth] = useState(false);
   const [adsTitle, setAdsTitle] = useState("DIIT Admission Going on");
   const [smartPrompt, setSmartPrompt] = useState("");
-  const [apiKey, setApiKey] = useState(
-    import.meta.env.VITE_GEMINI_API_KEY ||
-      localStorage.getItem("gemini_api_key") ||
-      "",
-  );
+  const apiKey = process.env.GROQ_API_KEY || "";
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content:
+        "👋 Hi! I'm your DIIT Bill Assistant. Tell me about your Facebook promotion and I'll fill both bills instantly!\n\nTry: \"DIIT Admission, 1st to 15th March, 30000 taka\"",
+      timestamp: new Date(),
+    },
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [isAiTyping, setIsAiTyping] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   const [data, setData] = useState<BillData>(() => ({
     refNo: generateReqRefNo(),
@@ -144,15 +171,15 @@ export default function App() {
       {
         id: crypto.randomUUID(),
         description:
-          "Promotion for \u201CDIIT Admission is Going On \u201Cimage and video\u201D",
+          "Promotion for \u201CDIIT Admission is Going On\u201D",
         duration: "15 Day",
         amount: 20000,
       },
     ],
     vatPercent: 18,
-    preparedBy: "Shakila Jahan Nipa",
+    preparedBy: "Sohana Morsalina",
     preparedByTitle:
-      "Assistant Professor, BBA Program\nCoordination, Promotion & Marketing Dept.\nDIIT",
+      "Sr. Officer\nDaffodil Institute of IT (DIIT)",
     recommendedBy: "Mahbubur Rahman",
     recommendedByTitle: "Assistant Director\nDIIT",
     approvedBy: "Prof. Dr. Mohammed Shakhawat Hossain",
@@ -363,7 +390,7 @@ export default function App() {
 
     if (!apiKey) {
       alert(
-        "Please enter a Google Gemini API Key below to use the smart auto-fill.",
+        "GROQ_API_KEY is not set in your .env file.",
       );
       return;
     }
@@ -371,20 +398,22 @@ export default function App() {
     setIsProcessing(true);
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        "https://api.groq.com/openai/v1/chat/completions",
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
           body: JSON.stringify({
-            contents: [
+            model: "llama-3.3-70b-versatile",
+            messages: [
               {
-                parts: [
-                  {
-                    text: `Extract the following details from this text: title, from_date (YYYY-MM-DD format), to_date (YYYY-MM-DD format), days (integer number, or null if not explicitly stated), amount (integer number). Return ONLY a valid JSON object with these exact keys. If a date is not given in full, guess the year as ${new Date().getFullYear()}. Text: "${smartPrompt}"`,
-                  },
-                ],
+                role: "user",
+                content: `Extract the following details from this text: title, from_date (YYYY-MM-DD format), to_date (YYYY-MM-DD format), days (integer number, or null if not explicitly stated), amount (integer number). Return ONLY a valid JSON object with these exact keys. If a date is not given in full, guess the year as ${new Date().getFullYear()}. Text: "${smartPrompt}"`,
               },
             ],
+            temperature: 0,
           }),
         },
       );
@@ -392,54 +421,14 @@ export default function App() {
       const resData = await response.json();
       if (resData.error) throw new Error(resData.error.message);
 
-      const textResponse = resData.candidates[0].content.parts[0].text;
+      const textResponse = resData.choices[0].message.content;
       const cleanJson = textResponse
         .replace(/```json/g, "")
         .replace(/```/g, "")
         .trim();
       const parsed = JSON.parse(cleanJson);
 
-      let calculatedDays = parsed.days;
-      if (!calculatedDays && parsed.from_date && parsed.to_date) {
-        const start = new Date(parsed.from_date);
-        const end = new Date(parsed.to_date);
-        calculatedDays =
-          Math.round(
-            Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24),
-          ) + 1;
-      }
-
-      const newReqData = { ...data };
-      newReqData.refNo = generateReqRefNo();
-      if (parsed.title) {
-        newReqData.subject = `Approval Request for Facebook Promotional Budget \u2013 \u201C${parsed.title}\u201D`;
-        newReqData.items[0].description = `Promotion for \u201C${parsed.title}\u201D \u201Cimage and video\u201D`;
-
-        const rec = getRecommendation(parsed.title);
-        newReqData.recommendedBy = rec.recommendedBy;
-        newReqData.recommendedByTitle = rec.recommendedByTitle;
-
-        setAdsTitle(parsed.title);
-      }
-      if (calculatedDays)
-        newReqData.items[0].duration = `${calculatedDays} Day${calculatedDays > 1 ? "s" : ""}`;
-      if (parsed.amount) newReqData.items[0].amount = Number(parsed.amount);
-      if (parsed.from_date) newReqData.date = parsed.from_date;
-      setData(newReqData);
-
-      const newFbData = { ...fbData };
-      newFbData.refNumber = generateFbRefNumber();
-      newFbData.transactionId = generateFbTransactionId();
-      if (parsed.title)
-        newFbData.items[0].name = `DIIT ads \u201C${parsed.title}\u201D`;
-      if (parsed.from_date) {
-        newFbData.items[0].startDate = `${parsed.from_date}T00:00`;
-        newFbData.date = parsed.from_date;
-      }
-      if (parsed.to_date)
-        newFbData.items[0].endDate = `${parsed.to_date}T23:59`;
-      if (parsed.amount) newFbData.items[0].amount = Number(parsed.amount);
-      setFbData(newFbData);
+      applyParsedData(parsed);
     } catch (err) {
       console.error(err);
       alert(
@@ -447,6 +436,206 @@ export default function App() {
       );
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // Apply parsed AI data to both bills
+  const applyParsedData = (parsed: any) => {
+    let calculatedDays = parsed.days;
+    if (!calculatedDays && parsed.from_date && parsed.to_date) {
+      const start = new Date(parsed.from_date);
+      const end = new Date(parsed.to_date);
+      calculatedDays =
+        Math.round(
+          Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24),
+        ) + 1;
+    }
+
+    const newReqData = { ...data };
+    newReqData.refNo = generateReqRefNo();
+    if (parsed.title) {
+      newReqData.subject = `Approval Request for Facebook Promotional Budget \u2013 \u201C${parsed.title}\u201D`;
+      newReqData.items[0].description = `Promotion for \u201C${parsed.title}\u201D`;
+
+      const rec = getRecommendation(parsed.title);
+      newReqData.recommendedBy = rec.recommendedBy;
+      newReqData.recommendedByTitle = rec.recommendedByTitle;
+
+      setAdsTitle(parsed.title);
+    }
+    if (calculatedDays)
+      newReqData.items[0].duration = `${calculatedDays} Day${calculatedDays > 1 ? "s" : ""}`;
+    if (parsed.amount) newReqData.items[0].amount = Number(parsed.amount);
+    if (parsed.from_date) newReqData.date = parsed.from_date;
+    setData(newReqData);
+
+    const newFbData = { ...fbData };
+    newFbData.refNumber = generateFbRefNumber();
+    newFbData.transactionId = generateFbTransactionId();
+    if (parsed.title)
+      newFbData.items[0].name = `DIIT ads \u201C${parsed.title}\u201D`;
+    if (parsed.from_date) {
+      newFbData.items[0].startDate = `${parsed.from_date}T00:00`;
+      newFbData.date = parsed.from_date;
+    }
+    if (parsed.to_date)
+      newFbData.items[0].endDate = `${parsed.to_date}T23:59`;
+    if (parsed.amount) newFbData.items[0].amount = Number(parsed.amount);
+    setFbData(newFbData);
+
+    return { parsed, calculatedDays };
+  };
+
+  // Scroll chat to bottom
+  const scrollChatToBottom = () => {
+    setTimeout(() => {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 100);
+  };
+
+  // Add message to chat
+  const addMessage = (
+    role: ChatMessage["role"],
+    content: string,
+    filledData?: boolean,
+  ) => {
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role,
+      content,
+      timestamp: new Date(),
+      filledData,
+    };
+    setChatMessages((prev) => [...prev, msg]);
+    scrollChatToBottom();
+    return msg;
+  };
+
+  // Main chat handler
+  const handleChatSend = async (overrideInput?: string) => {
+    const input = overrideInput || chatInput;
+    if (!input.trim()) return;
+
+    if (!apiKey) {
+      addMessage(
+        "assistant",
+        "⚠️ GROQ_API_KEY is not set in the .env file. Please add it and restart the dev server.",
+      );
+      return;
+    }
+
+    // Add user message
+    addMessage("user", input);
+    setChatInput("");
+    if (chatInputRef.current) chatInputRef.current.style.height = "auto";
+    setIsAiTyping(true);
+
+    // Build conversation context for the AI
+    const currentData = {
+      title: adsTitle,
+      date: data.date,
+      amount: data.items[0]?.amount,
+      duration: data.items[0]?.duration,
+      subject: data.subject,
+    };
+
+    try {
+      const response = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: [
+              {
+                role: "system",
+                content: `You are a DIIT Bill Generator assistant. You help fill Facebook promotion bills for Daffodil Institute of IT (DIIT).
+
+Current bill data: ${JSON.stringify(currentData)}
+Current year: ${new Date().getFullYear()}
+
+Your job is to extract or update bill details from user messages. Always respond with a JSON object with these keys:
+- action: "fill" (new bill) or "update" (modify existing) or "chat" (just conversation)
+- title: string or null
+- from_date: YYYY-MM-DD or null
+- to_date: YYYY-MM-DD or null
+- days: integer or null
+- amount: integer or null
+- message: a friendly confirmation message describing what you did
+
+If the user asks to change/update something specific (like amount, dates, title), set action to "update" and only include the fields being changed (set others to null).
+If the user is asking a question or chatting, set action to "chat" and put your response in message.
+If dates are partial (e.g. "1st to 15th March"), guess the full date using current year.
+
+Return ONLY a valid JSON object, no markdown or extra text.`,
+              },
+              {
+                role: "user",
+                content: input,
+              },
+            ],
+            temperature: 0,
+          }),
+        },
+      );
+
+      const resData = await response.json();
+      if (resData.error) throw new Error(resData.error.message);
+
+      const textResponse = resData.choices[0].message.content;
+      const cleanJson = textResponse
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+      const parsed = JSON.parse(cleanJson);
+
+      if (parsed.action === "chat") {
+        addMessage("assistant", parsed.message || "I'm here to help!");
+      } else {
+        // Apply the data
+        applyParsedData(parsed);
+
+        // Build confirmation message
+        let confirmMsg = parsed.message || "\u2705 Done! I've updated the bills.";
+        const details: string[] = [];
+        if (parsed.title) details.push(`\ud83d\udccc Title: ${parsed.title}`);
+        if (parsed.from_date)
+          details.push(`\ud83d\udcc5 From: ${parsed.from_date}`);
+        if (parsed.to_date) details.push(`\ud83d\udcc5 To: ${parsed.to_date}`);
+        if (parsed.amount)
+          details.push(
+            `\ud83d\udcb0 Amount: ${Number(parsed.amount).toLocaleString()} BDT`,
+          );
+
+        if (details.length > 0) {
+          confirmMsg += "\n\n" + details.join("\n");
+        }
+
+        confirmMsg +=
+          "\n\n\ud83d\udca1 You can say things like \"change amount to 50000\" or \"update dates to next month\" to make adjustments.";
+
+        addMessage("assistant", confirmMsg, true);
+      }
+    } catch (err: any) {
+      console.error(err);
+      addMessage(
+        "assistant",
+        `\u274c Oops! Something went wrong: ${err.message || "Please check your API key and try again."}`,
+      );
+    } finally {
+      setIsAiTyping(false);
+    }
+  };
+
+  // Handle Enter key in chat
+  const handleChatKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleChatSend();
     }
   };
 
@@ -488,6 +677,15 @@ export default function App() {
               Facebook Bill
             </button>
           </div>
+
+          <button
+            onClick={handleDownloadBoth}
+            disabled={isGenerating}
+            className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white py-2 px-5 rounded-lg text-sm font-bold transition-all flex items-center gap-2 disabled:opacity-50 shadow-md shadow-emerald-200/50 hover:shadow-lg active:scale-[0.98]"
+          >
+            <Download className="w-4 h-4" />
+            {isGenerating ? "Generating..." : "Download Both PDFs"}
+          </button>
         </div>
       </header>
 
@@ -495,59 +693,139 @@ export default function App() {
         {/* Sidebar / Form */}
         <div className="w-full lg:w-[450px] shrink-0 bg-white border-r border-slate-200 px-8 py-4 pb-10 overflow-y-auto print:hidden">
           <div className="space-y-6">
-            {/* AI Assistant Section */}
-            <section className="bg-gradient-to-br from-indigo-50 to-purple-50 p-5 rounded-xl border border-indigo-100 shadow-sm">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
-                  <Bot className="w-5 h-5 text-indigo-600" /> Smart Auto-Fill
-                </h2>
+            {/* AI Chat Assistant */}
+            <section className="rounded-2xl border border-indigo-100/80 shadow-lg overflow-hidden bg-white">
+              {/* Chat Header */}
+              <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 px-4 py-3 flex items-center gap-3">
+                <div className="p-1.5 bg-white/20 rounded-lg backdrop-blur-sm">
+                  <Sparkles className="w-4 h-4 text-white" />
+                </div>
+                <div className="flex-1">
+                  <h2 className="text-sm font-bold text-white tracking-wide">
+                    AI Bill Assistant
+                  </h2>
+                  <p className="text-[10px] text-indigo-200">
+                    Powered by Groq • Llama 3.3
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                  <span className="text-[10px] text-emerald-200 font-medium">
+                    Online
+                  </span>
+                </div>
               </div>
-              <p className="text-xs text-indigo-700 mb-3 opacity-80">
-                Just type your requirements (e.g. "DIIT Admission, 1st March to
-                15th March, 30000 BDT") and the AI will fill both bills.
-              </p>
-              <textarea
-                placeholder="e.g. Title: DIIT Admission, 1st to 15th March, 30000 taka"
-                value={smartPrompt}
-                onChange={(e) => setSmartPrompt(e.target.value)}
-                className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm mb-3 focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-white/80 backdrop-blur-sm"
-                rows={3}
-              />
-              {!apiKey ? (
-                <input
-                  type="password"
-                  placeholder="Enter Google Gemini API Key"
-                  value={apiKey}
-                  onChange={(e) => {
-                    setApiKey(e.target.value);
-                    localStorage.setItem("gemini_api_key", e.target.value);
-                  }}
-                  className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm mb-3 bg-white/80"
-                />
-              ) : null}
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSmartFill}
-                  disabled={isProcessing || !smartPrompt}
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <Sparkles className="w-4 h-4" />{" "}
-                  {isProcessing ? "Filling..." : "Auto Fill"}
-                </button>
-                <button
-                  onClick={handleDownloadBoth}
-                  disabled={isGenerating}
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-lg text-sm font-bold transition flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  <Download className="w-4 h-4" />{" "}
-                  {isGenerating ? "Wait..." : "Download Both"}
-                </button>
+
+              {/* Quick Actions */}
+              <div className="px-3 py-2 bg-indigo-50/50 border-b border-indigo-100/50 flex gap-1.5 overflow-x-auto">
+                {QUICK_ACTIONS.map((action) => (
+                  <button
+                    key={action.label}
+                    onClick={() => {
+                      if (action.prompt) {
+                        handleChatSend(action.prompt);
+                      } else {
+                        chatInputRef.current?.focus();
+                      }
+                    }}
+                    disabled={isAiTyping}
+                    className="chip-glow shrink-0 px-2.5 py-1 bg-white border border-indigo-200/60 rounded-full text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 hover:border-indigo-300 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {action.label}
+                  </button>
+                ))}
               </div>
-              {apiKey && (
-                <p className="text-[10px] text-center mt-3 text-indigo-400">
-                  API Key saved securely in your browser.
+
+              {/* Chat Messages Area */}
+              <div className="h-[280px] overflow-y-auto chat-scrollbar px-3 py-3 space-y-3 bg-gradient-to-b from-slate-50/80 to-white">
+                {chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={cn(
+                      "chat-message-enter flex",
+                      msg.role === "user" ? "justify-end" : "justify-start",
+                    )}
+                  >
+                    {msg.role === "assistant" && (
+                      <div className="shrink-0 w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center mr-2 mt-0.5">
+                        <Bot className="w-3.5 h-3.5 text-white" />
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        "max-w-[85%] px-3 py-2 rounded-2xl text-[13px] leading-relaxed",
+                        msg.role === "user"
+                          ? "bg-gradient-to-r from-indigo-600 to-violet-600 text-white rounded-br-md"
+                          : "bg-white border border-slate-200/80 text-slate-700 rounded-bl-md shadow-sm",
+                        msg.filledData && "border-emerald-200 bg-emerald-50/50",
+                      )}
+                    >
+                      <p className="whitespace-pre-line">{msg.content}</p>
+                      <p
+                        className={cn(
+                          "text-[9px] mt-1 opacity-60",
+                          msg.role === "user"
+                            ? "text-indigo-200 text-right"
+                            : "text-slate-400",
+                        )}
+                      >
+                        {msg.timestamp.toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Typing Indicator */}
+                {isAiTyping && (
+                  <div className="flex items-start gap-2 chat-message-enter">
+                    <div className="shrink-0 w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center">
+                      <Bot className="w-3.5 h-3.5 text-white" />
+                    </div>
+                    <div className="ai-shimmer px-4 py-3 rounded-2xl rounded-bl-md flex items-center gap-1.5">
+                      <span className="typing-dot w-2 h-2 bg-indigo-400 rounded-full" />
+                      <span className="typing-dot w-2 h-2 bg-indigo-400 rounded-full" />
+                      <span className="typing-dot w-2 h-2 bg-indigo-400 rounded-full" />
+                    </div>
+                  </div>
+                )}
+
+                <div ref={chatEndRef} />
+              </div>
+
+
+
+              {/* Chat Input */}
+              <div className="px-3 py-2 border-t border-slate-100 bg-white">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    ref={chatInputRef}
+                    value={chatInput}
+                    onChange={(e) => {
+                      setChatInput(e.target.value);
+                      e.target.style.height = "auto";
+                      e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+                    }}
+                    onKeyDown={handleChatKeyDown}
+                    placeholder="Type your bill details or ask a question..."
+                    rows={1}
+                    style={{ height: "auto" }}
+                    className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-300 resize-none overflow-hidden transition-colors placeholder:text-slate-400"
+                  />
+                  <button
+                    onClick={() => handleChatSend()}
+                    disabled={isAiTyping || !chatInput.trim()}
+                    className="shrink-0 p-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-md shadow-indigo-200/50 hover:shadow-lg hover:shadow-indigo-300/50 active:scale-95"
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[9px] text-slate-400 mt-1.5 text-center">
+                  Press Enter to send • Shift+Enter for new line
                 </p>
-              )}
+              </div>
             </section>
 
             {billType === "requisition" ? (
@@ -575,7 +853,7 @@ export default function App() {
                             recommendedByTitle: rec.recommendedByTitle,
                             items: prev.items.map((item) => ({
                               ...item,
-                              description: `Promotion for \u201C${title}\u201D \u201Cimage and video\u201D`,
+                              description: `Promotion for \u201C${title}\u201D`,
                             })),
                           }));
                         }}
