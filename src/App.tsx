@@ -341,7 +341,7 @@ export default function App() {
         const reqBlob = await html2pdf()
           .set(opt)
           .from(reqElement)
-          .output("blob");
+          .outputPdf("blob");
         zip.file(opt.filename, reqBlob);
       }
 
@@ -362,7 +362,7 @@ export default function App() {
         const fbBlob = await html2pdf()
           .set(opt2)
           .from(fbElement)
-          .output("blob");
+          .outputPdf("blob");
         zip.file(opt2.filename, fbBlob);
       }
 
